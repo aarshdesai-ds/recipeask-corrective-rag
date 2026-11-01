@@ -11,6 +11,7 @@ load_dotenv()
 
 UPPER = 0.7
 LOWER = 0.3
+NOT_FOUND = "That isn't in the recipe library."
 
 store = load_store()
 retriever = store.as_retriever(search_kwargs = {"k" : 4})
