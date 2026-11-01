@@ -1,0 +1,4 @@
+kb_db/
+.env
+venv/
+__pycache__/
