@@ -16,7 +16,7 @@ The project was built in three steps: plain RAG, then grading, then the web fall
 - [Step 1: The Baseline](#step-1-the-baseline)
 - [Step 2: Grading and the Verdict](#step-2-grading-and-the-verdict)
 - [Step 3: The Web Fallback](#step-3-the-web-fallback)
-- [How It Differs from the Course Notebook](#how-it-differs-from-the-course-notebook)
+- [Design Choices](#design-choices)
 - [What the Project Taught](#what-the-project-taught)
 - [Project Structure](#project-structure)
 - [How to Run](#how-to-run)
@@ -173,11 +173,11 @@ The seven general questions went from "That isn't in the recipe library" to cite
 
 ---
 
-## How It Differs from the Course Notebook
+## Design Choices
 
-The pattern follows the CRAG notebook (score each chunk, verdict by threshold, rewrite, web search, refine, generate), with these changes:
+The pattern follows standard Corrective RAG (score each chunk, verdict by threshold, rewrite, web search, refine, generate), with these changes:
 
-| Notebook | RecipeAsk | Why |
+| Common CRAG setup | RecipeAsk | Why |
 |---|---|---|
 | PDF chunks | Whole recipes, one document each | Recipes are short, and refine does the cutting |
 | Sentences under 20 characters dropped | Recipes split into lines, all kept | "- spinach: 300 g" and "Freezes well." are short and are often the answer |
