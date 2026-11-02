@@ -3,11 +3,10 @@ import re
 import sys
 from collections import defaultdict
 
-from crag_graph import NOT_FOUND, app
+from crag_graph import CITATION, NOT_FOUND, app
 
 ROWS_PATH = "eval/questions.jsonl"
-RESULTS_PATH = "eval/results_step2.jsonl"
-CITATION = re.compile(r"\[([a-z_]+)\]")
+RESULTS_PATH = "eval/results_step3.jsonl"
 VERDICTS = ["CORRECT", "AMBIGUOUS", "INCORRECT"]
 PREFIX = "Partly covered by the recipes:"
 
@@ -20,27 +19,47 @@ def load_rows(path):
                 rows.append(json.loads(line))
     return rows
 
+def body(answer):
+    return answer.split("\n\nSources:")[0]
+
 def cited_ids(answer):
-    return CITATION.findall(answer)
+    return CITATION.findall(body(answer))
+
+def separate_citations(answer):
+    sentences = re.split(r"(?<=[.!?])\s+", body(answer))
+    recipe_only = web_only = False
+    for sentence in sentences:
+        ids = CITATION.findall(sentence)
+        has_web = any(i.startswith("web_") for i in ids)
+        has_recipe = any(not i.startswith("web_") for i in ids)
+        recipe_only = recipe_only or (has_recipe and not has_web)
+        web_only = web_only or (has_web and not has_recipe)
+    return recipe_only and web_only
 
 def check_row(row, result):
     cited = cited_ids(result["answer"])
+    web_cited = [i for i in cited if i.startswith("web_")]
+    recipe_cited = [i for i in cited if not i.startswith("web_")]
     checks = {
         "verdict": result["verdict"] == row["expected_verdict"],
-        "no false citations": all(recipe_id in result["good_ids"] for recipe_id in cited),
+        "no false citations": all(i in result["good_ids"] + result["web_ids"] for i in cited),
     }
     if row["group"] in ("library", "half"):
-        checks["right recipe"] = row["recipe_id"] in cited
-    if row["group"] == "half":
-        checks["prefix"] = result["answer"].startswith(PREFIX)
+        checks["right recipe"] = row["recipe_id"] in recipe_cited
+    if row["group"] == "library":
+        checks["library only"] = not web_cited
     if row["group"] == "general":
-        checks["not found"] = result["answer"] == NOT_FOUND
+        checks["cites the web"] = bool(web_cited) and not recipe_cited
+    if row["group"] == "half":
+        checks["cites the web"] = bool(web_cited)
+        checks["prefix"] = result["answer"].startswith(PREFIX)
+        checks["separate citations"] = separate_citations(result["answer"])
     return checks
 
 def run_eval(rows):
     results = []
     for row in rows:
-        config = {"run_name": "recipe-ask-eval", "tags": ["recipe-ask", "eval"],
+        config = {"run_name": "recipe-ask-eval", "tags": ["recipe-ask", "eval", "step3"],
                   "metadata": {"row_id": row["id"], "group": row["group"]}}
         output = app.invoke({"question": row["question"]}, config=config)
         result = {
@@ -51,6 +70,9 @@ def run_eval(rows):
             "verdict": output["verdict"],
             "scores": output["scores"],
             "good_ids": [doc.metadata["id"] for doc in output["good_docs"]],
+            "web_query": output.get("web_query", ""),
+            "web_ids": [doc.metadata["id"] for doc in output.get("web_docs", [])],
+            "kept": output.get("kept_strips", []),
             "answer": output["answer"],
         }
         result["checks"] = check_row(row, result)
@@ -79,6 +101,9 @@ def print_report(results):
             passed[name] += ok
     print("\nchecks: " + " · ".join(f"{name} {passed[name]}/{applied[name]}" for name in applied))
 
+    not_found = sum(result["answer"] == NOT_FOUND for result in results)
+    print(f"not found: {not_found}/{len(results)}")
+
     failures = [result for result in results if not all(result["checks"].values())]
     if not failures:
         print("\nno failures")
@@ -90,7 +115,10 @@ def print_report(results):
               f"(verdict {result['verdict']}, expected {result['expected_verdict']})")
         print(f"     Q: {result['question']}")
         print("     scores: " + ", ".join(f"{recipe_id} {score:.2f}" for recipe_id, score, _ in result["scores"]))
-        print(f"     A: {result['answer']}\n")
+        if result["web_query"]:
+            print(f"     web query: {result['web_query']}")
+        print("     kept: " + " | ".join(f"[{source_id}] {text[:60]}" for source_id, text in result["kept"]))
+        print(f"     A: {body(result['answer'])}\n")
 
 
 if __name__ == "__main__":
@@ -98,20 +126,28 @@ if __name__ == "__main__":
     print("ok  " if cited_ids("300 g [palak_paneer]. Also [red_lentil_soup].") == ["palak_paneer", "red_lentil_soup"] else "FAIL",
           "citations found")
     print("ok  " if cited_ids("Score [0.5] and step [1].") == [] else "FAIL", "numbers in brackets are not citations")
+
     library_row = {"group": "library", "expected_verdict": "CORRECT", "recipe_id": "palak_paneer"}
-    good = {"verdict": "CORRECT", "good_ids": ["palak_paneer"], "answer": "300 g [palak_paneer]."}
-    false_cite = {"verdict": "CORRECT", "good_ids": ["palak_paneer"], "answer": "300 g [chickpea_spinach_curry]."}
+    good = {"verdict": "CORRECT", "good_ids": ["palak_paneer"], "web_ids": [], "answer": "300 g [palak_paneer]."}
+    false_cite = {"verdict": "CORRECT", "good_ids": ["palak_paneer"], "web_ids": [], "answer": "300 g [chickpea_spinach_curry]."}
     print("ok  " if all(check_row(library_row, good).values()) else "FAIL", "a good library answer passes:", check_row(library_row, good))
-    print("ok  " if not check_row(library_row, false_cite)["no false citations"] else "FAIL", "a citation outside good_docs fails")
+    print("ok  " if not check_row(library_row, false_cite)["no false citations"] else "FAIL", "a citation outside the sources fails")
+
     general_row = {"group": "general", "expected_verdict": "INCORRECT", "recipe_id": None}
-    print("ok  " if "right recipe" not in check_row(general_row, {"verdict": "INCORRECT", "good_ids": [], "answer": NOT_FOUND})
-          else "FAIL", "right-recipe check skipped for general rows")
+    web_answer = {"verdict": "INCORRECT", "good_ids": [], "web_ids": ["web_a"],
+                  "answer": "165 °F [web_a].\n\nSources:\n- web_a: https://example.com"}
+    print("ok  " if all(check_row(general_row, web_answer).values()) else "FAIL", "a cited web answer passes:", check_row(general_row, web_answer))
+
+    print("ok  " if separate_citations("It freezes well [red_lentil_soup]. It keeps 3 months [web_a].") else "FAIL",
+          "one fact per source passes")
+    print("ok  " if not separate_citations("It freezes and keeps 3 months [red_lentil_soup][web_a].") else "FAIL",
+          "pooled citations fail")
 
     rows = load_rows(ROWS_PATH)
     print("ok  " if len(rows) == 17 else "FAIL", "questions loaded:", len(rows))
 
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        print("\n--- step 2 eval: 17 questions (about 85 model calls) ---")
+        print("\n--- step 3 eval: 17 questions (about 120 model calls, about 11 web searches) ---")
         results = run_eval(rows)
         save_results(results, RESULTS_PATH)
         print_report(results)
