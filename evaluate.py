@@ -147,8 +147,13 @@ if __name__ == "__main__":
     print("ok  " if len(rows) == 17 else "FAIL", "questions loaded:", len(rows))
 
     if len(sys.argv) > 1 and sys.argv[1] == "run":
-        print("\n--- step 3 eval: 17 questions (about 120 model calls, about 11 web searches) ---")
-        results = run_eval(rows)
-        save_results(results, RESULTS_PATH)
+        group = sys.argv[2] if len(sys.argv) > 2 else None
+        selected = [row for row in rows if row["group"] == group] if group else rows
+        if not selected:
+            sys.exit(f"No rows in group '{group}'. Groups: {sorted({row['group'] for row in rows})}")
+        path = RESULTS_PATH.replace(".jsonl", f"_{group}.jsonl") if group else RESULTS_PATH
+        print(f"\n--- step 3 eval: {len(selected)} questions{f' (group: {group})' if group else ''} ---")
+        results = run_eval(selected)
+        save_results(results, path)
         print_report(results)
-        print(f"\nsaved to {RESULTS_PATH}")
+        print(f"\nsaved to {path}")
